@@ -869,4 +869,17 @@ export const ROLE_COLORS: Record<AgentRole, number> = {
   qa: 0xe5799c,
   researcher: 0x4fc99a,
   devops: 0xd98b5a,
+  // Divisi Greenpark. Warnanya mengikuti warna divisi di dashboard, supaya
+  // orang yang sama dikenali di dua layar yang berbeda.
+  teknik: 0x15803d,
+  perencanaan: 0x2563eb,
+  legalpermit: 0xf59e0b,
+  marketing: 0xdc2626,
+  digitalmarketing: 0xdb2777,
+  sales: 0x7c3aed,
+  finance: 0x0891b2,
+  sdm: 0x65a30d,
+  cso: 0xea580c,
+  kpr: 0x0d9488,
+  departemen: 0x64748b,
 }

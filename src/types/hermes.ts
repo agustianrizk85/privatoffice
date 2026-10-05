@@ -99,6 +99,24 @@ export type AgentRole =
   | 'qa'
   | 'researcher'
   | 'devops'
+  // Divisi Greenpark, dipakai saat GREENPARK_API dipasang (lihat
+  // lib/greenpark/sumber.ts). DITAMBAHKAN, bukan menggantikan: peran lama
+  // tetap berlaku penuh selama sumbernya masih CLI Hermes.
+  //
+  // Memaksakan divisi ke peran lama bukan pilihan: nilai peran dicetak apa
+  // adanya di panel agen dan panel tugas, jadi orang Teknik akan terbaca
+  // sebagai backend -- keterangan yang salah, bukan warna yang kurang pas.
+  | 'teknik'
+  | 'perencanaan'
+  | 'legalpermit'
+  | 'marketing'
+  | 'digitalmarketing'
+  | 'sales'
+  | 'finance'
+  | 'sdm'
+  | 'cso'
+  | 'kpr'
+  | 'departemen'
 
 export type AgentStatus =
   | 'idle'

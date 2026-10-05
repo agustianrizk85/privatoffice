@@ -10,6 +10,14 @@
  * ("delegate_task child contexts cannot mutate Kanban tasks"). Every call here
  * strips those markers so the office UI can drive the board from a web request.
  */
+import {
+  greenparkAktif,
+  gpAssignees,
+  gpDisplay,
+  gpProfiles,
+  gpRole,
+  gpTasks,
+} from '@/lib/greenpark/sumber'
 import { execFile } from 'node:child_process'
 import { access, readFile, readdir } from 'node:fs/promises'
 import os from 'node:os'
@@ -164,6 +172,7 @@ function toTask(r: RawTask): Task {
  * the rest of this file keeps paying for.)
  */
 export async function listTasks(opts: { includeArchived?: boolean } = {}): Promise<Task[]> {
+  if (greenparkAktif()) return gpTasks(opts)
   const args = opts.includeArchived ? ['list', '--archived'] : ['list']
   const rows = await kanbanJson<RawTask[]>(args)
   return rows.map(toTask)
@@ -184,6 +193,14 @@ export async function getTask(id: string): Promise<Task | null> {
 }
 
 export async function createTask(input: NewTaskInput): Promise<Task> {
+  // Pembacaan sudah pindah ke papan Greenpark, penulisan BELUM. Tanpa
+  // penjaga ini, tombol "+ Tugas" akan membuat tugas Hermes yang kemudian
+  // tidak pernah muncul di papan -- hilang tanpa jejak, bukan gagal.
+  if (greenparkAktif()) {
+    throw new Error(
+      'Kantor sedang menampilkan papan Greenpark, yang hanya dibaca. Buat kartunya di Papan Tugas dashboard.',
+    )
+  }
   const args = ['create', input.title, '--assignee', input.assignee]
   if (input.body) args.push('--body', input.body)
   if (typeof input.priority === 'number') args.push('--priority', String(input.priority))
@@ -466,6 +483,9 @@ const ROLE_KEYWORDS: [RegExp, AgentRole][] = [
 ]
 
 export function roleFor(name: string): AgentRole {
+  // Divisi orang itu, kalau kantor sedang diisi data Greenpark.
+  const divisi = gpRole(name)
+  if (divisi) return divisi
   if (name === 'default') return 'orchestrator'
   for (const [re, role] of ROLE_KEYWORDS) {
     if (re.test(name)) return role
@@ -481,6 +501,7 @@ export function roleFor(name: string): AgentRole {
  * assigning it work is what brings it into the office.
  */
 export async function listAssignees(): Promise<{ name: string; onDisk: boolean; total: number }[]> {
+  if (greenparkAktif()) return gpAssignees()
   const raw = await kanbanJson<RawAssignee[]>(['assignees'])
   return raw
     .map((r) => ({
@@ -508,6 +529,7 @@ function hermesHome(): string {
  * thing `hermes profile list` counts.
  */
 export async function listProfiles(): Promise<string[]> {
+  if (greenparkAktif()) return gpProfiles()
   const out: string[] = []
 
   // `default` is the install's own profile and lives at the Hermes root
@@ -697,7 +719,9 @@ export async function listAgents(tasks: Task[], prefetchedAssignees?: { name: st
       : 'idle'
     return {
       name,
-      displayName: name,
+      // Kartu papan menunjuk orang lewat username, jadi username yang jadi
+      // kuncinya; yang dipajang tetap nama aslinya.
+      displayName: gpDisplay(name) ?? name,
       role: roleFor(name),
       deskIndex: ordered.indexOf(name) < 8 ? ordered.indexOf(name) : null,
       status,
