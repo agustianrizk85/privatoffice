@@ -3,11 +3,13 @@ import { createTask, listAgents, listAssignees, listTasks } from '@/lib/hermes/k
 import { visible } from '@/lib/hermes/office-membership'
 import type { TaskOrigin } from '@/types/hermes'
 import { assertLocalWriteRequest } from '@/lib/local-guard'
+import { greenparkAktif, gpToken } from '@/lib/greenpark/sumber'
+import { punyaSumberSendiri, tugasUntukDivisi } from '@/lib/greenpark/tugasDivisi'
 
 export const dynamic = 'force-dynamic'
 
 /** The board: tasks plus the agents staffing them. */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
     // `--archived` is inclusive, so this is the live board PLUS the archive: the
     // 2D view has an ARSIP column that stayed permanently empty without it.
@@ -17,10 +19,30 @@ export async function GET() {
       listTasks({ includeArchived: true }),
       listAssignees(),
     ])
+    // Papan diisi dari SUMBER ASLI divisi bila divisi itu punya satu, dan hanya
+    // ketika sebuah divisi memang diminta lewat ?divisi=. Tanpa itu papan pusat
+    // tetap yang dipakai: menggabung keempat sumber sekaligus menghasilkan
+    // ratusan kartu tanpa konteks, bukan ikhtisar.
+    const divisi = (req.nextUrl.searchParams.get('divisi') || '').trim().toLowerCase()
+    const dariDivisi =
+      greenparkAktif() && divisi && punyaSumberSendiri(divisi)
+        ? await tugasUntukDivisi(divisi, await gpToken())
+        : null
+
+    // Kartu divisi dihitung SEBELUM listAgents, dan dioper ke sana.
+    //
+    // Urutan ini yang menentukan apakah ada orang duduk di meja. listAgents
+    // menandai seseorang `working` HANYA kalau ia memegang tugas berstatus
+    // running/review di daftar yang dioper padanya. Versi pertama memanggilnya
+    // dengan kartu papan PUSAT -- yang kosong -- lalu mengembalikan kartu divisi
+    // di sebelahnya. Hasilnya papan penuh kartu sementara semua orang `idle`,
+    // dan tidak satu pun meja terisi. Tidak ada galat; cuma kantor yang sepi.
+    const papan = dariDivisi ?? tasks
+
     // Apply the hide list: a hidden profile is absent from the office but its
     // tasks stay on the board, so the work is never hidden, only the avatar.
-    const agents = visible(await listAgents(tasks, assignees))
-    return NextResponse.json({ tasks, agents })
+    const agents = visible(await listAgents(papan, assignees))
+    return NextResponse.json({ tasks: papan, agents })
   } catch (err) {
     return NextResponse.json(
       { error: { code: 'hermes_unavailable', message: (err as Error).message, status: 503 } },

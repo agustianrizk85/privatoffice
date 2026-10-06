@@ -88,6 +88,9 @@ export type Agent = {
   deskIndex: number | null
   status: AgentStatus
   currentTaskId?: string | null
+  /** Semua divisi yang orang ini menjadi anggotanya; kosong di luar mode
+   *  Greenpark. Dipakai untuk menyaring kantor ke satu divisi. */
+  divisiSemua?: string[]
   /** The profile's default model — what its workers and chats run. */
   model?: string | null
 }

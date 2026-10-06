@@ -14,6 +14,7 @@ import {
   greenparkAktif,
   gpAssignees,
   gpDisplay,
+  gpDivisiSemua,
   gpProfiles,
   gpRole,
   gpTasks,
@@ -723,6 +724,7 @@ export async function listAgents(tasks: Task[], prefetchedAssignees?: { name: st
       // kuncinya; yang dipajang tetap nama aslinya.
       displayName: gpDisplay(name) ?? name,
       role: roleFor(name),
+      divisiSemua: gpDivisiSemua(name),
       deskIndex: ordered.indexOf(name) < 8 ? ordered.indexOf(name) : null,
       status,
       currentTaskId: task?.id ?? null,

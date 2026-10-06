@@ -33,6 +33,18 @@ type State = {
   refreshMeeting: () => Promise<void>
 }
 
+/**
+ * Divisi yang diminta lewat ?divisi=teknik di URL.
+ *
+ * Dipakai supaya dashboard bisa menautkan langsung ke ruangan satu divisi.
+ * Dibaca tiap penyegaran, bukan sekali saat modul dimuat: pengguna bisa
+ * mengganti divisi dengan menyunting URL tanpa memuat ulang halaman.
+ */
+function divisiDariURL(): string {
+  if (typeof window === 'undefined') return ''
+  return (new URLSearchParams(window.location.search).get('divisi') || '').trim().toLowerCase()
+}
+
 export const useOffice = create<State>((set) => ({
   tasks: [],
   agents: [],
@@ -49,14 +61,28 @@ export const useOffice = create<State>((set) => ({
   newTaskOpen: false,
 
   async load() {
-    const res = await fetchJson<{ tasks?: Task[]; agents?: Agent[] }>('/api/hermes/tasks', {
+    const res = await fetchJson<{ tasks?: Task[]; agents?: Agent[] }>(      `/api/hermes/tasks${divisiDariURL() ? `?divisi=${encodeURIComponent(divisiDariURL())}` : ''}`, {
       cache: 'no-store',
     })
     if (!res.ok || !res.data) {
       set({ error: res.error || 'gagal memuat papan', loading: false })
       return
     }
-    set({ tasks: res.data.tasks || [], agents: res.data.agents || [], error: null, loading: false })
+    // Penyaring divisi dibaca dari URL dan diterapkan DI SINI, satu titik, supaya
+    // adegan 3D, panel, dan hitungan di kepala layar tidak pernah berbeda isi.
+    //
+    // Disaring di klien, bukan di server: GREENPARK_DIVISI adalah konstanta
+    // tingkat modul, dan menjadikannya per-permintaan berarti dua tab dengan
+    // divisi berbeda saling menimpa penyaring satu sama lain.
+    const divisi = divisiDariURL()
+    const semua = res.data.agents || []
+    // Disaring menurut KEANGGOTAAN, bukan divisi rumah: seorang direktur adalah
+    // anggota Teknik meskipun ruangannya di divisi lain, dan "buka ruangan
+    // Teknik" semestinya memperlihatkannya.
+    const agents = divisi
+      ? semua.filter((a) => (a.divisiSemua || []).includes(divisi) || (a.role || '').toLowerCase() === divisi)
+      : semua
+    set({ tasks: res.data.tasks || [], agents, error: null, loading: false })
   },
 
   async refreshMeeting() {

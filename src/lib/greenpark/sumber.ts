@@ -156,21 +156,65 @@ async function papan(): Promise<GPPapan> {
  * nilai yang salah.
  */
 const petaNama = new Map<string, string>()
-const petaDivisi = new Map<string, string>()
+/** SEMUA divisi orang itu. Satu orang bisa berada di beberapa sekaligus --
+ *  seorang direktur muncul di hampir semuanya -- dan auth mengirim SATU BARIS
+ *  per pasangan (orang, divisi): 68 baris untuk 34 orang. Menyimpannya sebagai
+ *  satu nilai per username membuat baris terakhir menimpa yang sebelumnya, dan
+ *  penyaring divisi lalu membuang orang yang sebenarnya anggota. */
+const petaDivisiBanyak = new Map<string, Set<string>>()
+/** Divisi RUMAH: yang pertama dikirim auth untuk orang itu. Dipakai saat tidak
+ *  ada penyaring, supaya tiap orang menempati tepat satu ruangan -- bukan
+ *  muncul berkali-kali di gedung yang sama. */
+const petaDivisiUtama = new Map<string, string>()
 
 function isiPetaOrang(p: GPPapan) {
+  petaDivisiBanyak.clear()
+  petaDivisiUtama.clear()
   for (const u of p.users ?? []) {
     if (!u.username) continue
     if (u.name) petaNama.set(u.username, u.name)
-    if (u.division) petaDivisi.set(u.username, u.division.toLowerCase())
+    if (!u.division) continue
+    const d = u.division.toLowerCase()
+    let himpunan = petaDivisiBanyak.get(u.username)
+    if (!himpunan) {
+      himpunan = new Set<string>()
+      petaDivisiBanyak.set(u.username, himpunan)
+    }
+    himpunan.add(d)
+    if (!petaDivisiUtama.has(u.username)) petaDivisiUtama.set(u.username, d)
   }
+}
+
+/** Divisi yang menentukan ruangan dan warna orang itu. */
+function divisiTampil(username: string): string | null {
+  if (DIVISI && petaDivisiBanyak.get(username)?.has(DIVISI)) return DIVISI
+  return petaDivisiUtama.get(username) ?? null
 }
 
 /** Divisi seseorang sebagai peran kantor, atau null bila tidak dikenal. */
 export function gpRole(username: string): AgentRole | null {
   if (!greenparkAktif()) return null
-  const d = petaDivisi.get(username)
-  return (d as AgentRole) || null
+  return (divisiTampil(username) as AgentRole) || null
+}
+
+/** Token SSO yang sedang berlaku, untuk memanggil backend divisi.
+ *
+ * Token yang SAMA diterima keempat backend (legalpermit, perencanaan, teknik,
+ * marketing) -- sudah diuji langsung, bukan diasumsikan. Jadi tidak perlu
+ * jembatan token per divisi seperti dulu. */
+export async function gpToken(): Promise<string> {
+  return token()
+}
+
+/** SEMUA divisi yang orang ini menjadi anggotanya.
+ *
+ * Berbeda dari gpRole, yang hanya mengembalikan satu divisi rumah untuk
+ * menentukan ruangan dan warna. Untuk pertanyaan "siapa saja orang Teknik",
+ * yang benar adalah keanggotaan: seorang direktur memang anggota Teknik
+ * meskipun rumahnya di divisi lain. */
+export function gpDivisiSemua(username: string): string[] {
+  if (!greenparkAktif()) return []
+  return [...(petaDivisiBanyak.get(username) ?? [])]
 }
 
 /** Nama asli orang itu; `null` berarti pakai username apa adanya. */
@@ -182,7 +226,7 @@ export function gpDisplay(username: string): string | null {
 /** Benar bila orang ini termasuk divisi yang sedang ditampilkan. */
 function dalamDivisi(username: string): boolean {
   if (!DIVISI) return true
-  return petaDivisi.get(username) === DIVISI
+  return petaDivisiBanyak.get(username)?.has(DIVISI) === true
 }
 
 // --- yang dipakai kanban.ts -------------------------------------------------
@@ -229,8 +273,16 @@ export async function gpAssignees(): Promise<{ name: string; onDisk: boolean; to
   const jumlah = new Map<string, number>()
   for (const t of tugas) if (t.assignee) jumlah.set(t.assignee, (jumlah.get(t.assignee) ?? 0) + 1)
 
+  // Dideduplikasi: auth mengirim satu baris per keanggotaan divisi, jadi tanpa
+  // ini seorang direktur muncul sebagai sembilan orang berbeda di lantai.
+  const sudahDidaftar = new Set<string>()
   return (p.users ?? [])
-    .filter((u) => u.username && dalamDivisi(u.username))
+    .filter((u) => {
+      if (!u.username || !dalamDivisi(u.username)) return false
+      if (sudahDidaftar.has(u.username)) return false
+      sudahDidaftar.add(u.username)
+      return true
+    })
     .map((u) => ({
       name: u.username,
       // `onDisk` di Hermes berarti "profil ini sungguh ada", bukan sekadar nama
