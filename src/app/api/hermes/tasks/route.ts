@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createTask, listAgents, listAssignees, listTasks } from '@/lib/hermes/kanban'
+import { greenparkAktif, gpKeanggotaan } from '@/lib/greenpark/sumber'
+import { susunDenah } from '@/lib/greenpark/denah'
 import { visible } from '@/lib/hermes/office-membership'
 import type { TaskOrigin } from '@/types/hermes'
 import { assertLocalWriteRequest } from '@/lib/local-guard'
@@ -20,7 +22,12 @@ export async function GET() {
     // Apply the hide list: a hidden profile is absent from the office but its
     // tasks stay on the board, so the work is never hidden, only the avatar.
     const agents = visible(await listAgents(tasks, assignees))
-    return NextResponse.json({ tasks, agents })
+    // Rencana ruangan ikut dikirim, dan dihitung dari ROSTER -- bukan dari
+    // daftar agen di atas. Divisi yang semua anggotanya disembunyikan tetap
+    // harus punya ruangan; menurunkannya dari agen akan membuat ruangan itu
+    // lenyap begitu orang terakhirnya disembunyikan.
+    const denah = greenparkAktif() ? susunDenah(await gpKeanggotaan()) : null
+    return NextResponse.json({ tasks, agents, denah })
   } catch (err) {
     return NextResponse.json(
       { error: { code: 'hermes_unavailable', message: (err as Error).message, status: 503 } },

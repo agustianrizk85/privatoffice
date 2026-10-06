@@ -84,8 +84,15 @@ export type Agent = {
   name: string
   displayName: string
   role: AgentRole
-  /** Desk slot 0-7, or null when the agent has no station. */
+  /** Nomor meja global, atau null bila orang ini tidak kebagian kursi.
+   *
+   *  Dulu berkisar 0-7 karena kantor punya delapan meja. Sekarang jumlahnya
+   *  mengikuti roster, dan nomornya = meja pertama ruangan + urutan orang di
+   *  ruangan itu. Namanya sengaja TIDAK diubah: deskByIndex, PeekPanel, dan
+   *  SpriteOffice semuanya memakai nama ini. */
   deskIndex: number | null
+  /** Divisi yang menentukan ruangan dan warna orang ini. */
+  divisi?: string | null
   status: AgentStatus
   currentTaskId?: string | null
   /** The profile's default model — what its workers and chats run. */

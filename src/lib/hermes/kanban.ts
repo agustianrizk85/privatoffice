@@ -14,10 +14,12 @@ import {
   greenparkAktif,
   gpAssignees,
   gpDisplay,
+  gpKeanggotaan,
   gpProfiles,
   gpRole,
   gpTasks,
 } from '@/lib/greenpark/sumber'
+import { mejaUntuk, susunDenah } from '@/lib/greenpark/denah'
 import { execFile } from 'node:child_process'
 import { access, readFile, readdir } from 'node:fs/promises'
 import os from 'node:os'
@@ -710,6 +712,27 @@ export async function listAgents(tasks: Task[], prefetchedAssignees?: { name: st
     return av - bv || a.localeCompare(b)
   })
 
+  // Mode Greenpark: tiap orang duduk di ruangan divisinya sendiri, dan nomor
+  // mejanya dihitung dari rencana denah yang sama dengan yang dipakai pembangun
+  // ruangan. Satu rumus, dua sisi.
+  //
+  // Urutannya ABJAD di dalam ruangan, BUKAN urutan `ordered` yang mendahulukan
+  // orang yang sedang bekerja. `ordered` dihitung ulang tiap polling empat
+  // detik, jadi memakainya berarti satu kartu masuk "Sedang Dikerjakan"
+  // memindahkan orang ke meja -- bahkan ke ruangan -- yang berbeda.
+  const rencana = greenparkAktif() ? susunDenah(await gpKeanggotaan()) : null
+  const urutanDiRuangan = new Map<string, number>()
+  if (rencana) {
+    const isi = new Map<string, number>()
+    for (const n of [...names].sort((a, b) => a.localeCompare(b))) {
+      const d = gpRole(n)
+      if (!d) continue
+      const k = isi.get(d) ?? 0
+      isi.set(d, k + 1)
+      urutanDiRuangan.set(n, k)
+    }
+  }
+
   return names.map((name) => {
     const task = active.get(name)
     const status: Agent['status'] = task
@@ -723,7 +746,12 @@ export async function listAgents(tasks: Task[], prefetchedAssignees?: { name: st
       // kuncinya; yang dipajang tetap nama aslinya.
       displayName: gpDisplay(name) ?? name,
       role: roleFor(name),
-      deskIndex: ordered.indexOf(name) < 8 ? ordered.indexOf(name) : null,
+      divisi: rencana ? gpRole(name) : null,
+      deskIndex: rencana
+        ? mejaUntuk(rencana, gpRole(name), urutanDiRuangan.get(name) ?? 0)
+        : ordered.indexOf(name) < 8
+          ? ordered.indexOf(name)
+          : null,
       status,
       currentTaskId: task?.id ?? null,
     }

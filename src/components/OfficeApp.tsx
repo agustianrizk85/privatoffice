@@ -100,7 +100,7 @@ export default function OfficeApp() {
       {/* ------------------------------------------------------- top bar */}
       <header className="vp-topbar">
         <div className="flex items-center gap-3">
-          <span className="vp-logo">Hermes Office</span>
+          <span className="vp-logo">Greenpark Office</span>
           <span className={`vp-dot ${backendOnline ? 'ok' : 'bad'}`} />
           <span className="vp-muted">
             {backendOnline ? `${agents.length} agent · ${running} jalan · ${pct}% rilis` : 'backend offline'}

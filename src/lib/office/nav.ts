@@ -30,8 +30,14 @@ export const CELL = 0.5
 /** Body radius used for both collision and grid inflation. */
 export const BODY_R = 0.34
 
-const COLS = Math.ceil(FLOOR.width / CELL)
-const ROWS = Math.ceil(FLOOR.depth / CELL)
+// `let`, dan TIDAK dihitung saat modul dimuat. Ukuran lantai kini mengikuti
+// jumlah ruangan, jadi grid yang dibangun saat impor akan selalu seukuran denah
+// bawaan -- dan nav.ts menolak apa pun di luar batas itu. Gejalanya bukan galat:
+// seluruh ruangan baru dianggap terlarang, route() mengembalikan [], dan scene.ts
+// sengaja jatuh ke gerak garis lurus. Avatar lalu meluncur menembus dinding
+// dengan konsol bersih.
+let COLS = Math.ceil(FLOOR.width / CELL)
+let ROWS = Math.ceil(FLOOR.depth / CELL)
 
 /** Grid coordinate -> world. */
 export const worldX = (cx: number) => -HALF_W + (cx + 0.5) * CELL
@@ -39,8 +45,8 @@ export const worldZ = (cz: number) => -HALF_D + (cz + 0.5) * CELL
 export const gridX = (x: number) => Math.floor((x + HALF_W) / CELL)
 export const gridZ = (z: number) => Math.floor((z + HALF_D) / CELL)
 
-const solidWalls: Footprint[] = FOOTPRINTS.filter((f) => f.kind === 'wall')
-const solidProps = blockingFootprints()
+let solidWalls: Footprint[] = FOOTPRINTS.filter((f) => f.kind === 'wall')
+let solidProps = blockingFootprints()
 
 /** True when `p` lies inside a footprint inflated by `pad`. */
 function inside(f: Footprint, x: number, z: number, pad: number) {
@@ -82,7 +88,7 @@ export function blocked(
 
 /* ------------------------------------------------------------------- grid -- */
 
-const walkable = new Uint8Array(COLS * ROWS)
+let walkable = new Uint8Array(COLS * ROWS)
 
 function buildGrid() {
   for (let cz = 0; cz < ROWS; cz++) {
@@ -91,6 +97,23 @@ function buildGrid() {
       walkable[cz * COLS + cx] = ok
     }
   }
+}
+
+/**
+ * Bangun ulang grid jalan dari denah yang sedang berlaku.
+ *
+ * WAJIB dipanggil di langkah yang SAMA dengan layout.terapkanDenah(), bukan satu
+ * commit kemudian. Grid yang basi tidak menghasilkan galat apa pun: route()
+ * mengembalikan [] dan scene.ts sengaja jatuh ke gerak garis lurus, sehingga
+ * avatar meluncur menembus dinding dengan konsol yang bersih.
+ */
+export function rebuildNav() {
+  COLS = Math.ceil(FLOOR.width / CELL)
+  ROWS = Math.ceil(FLOOR.depth / CELL)
+  solidWalls = FOOTPRINTS.filter((f) => f.kind === 'wall')
+  solidProps = blockingFootprints()
+  walkable = new Uint8Array(COLS * ROWS)
+  buildGrid()
 }
 buildGrid()
 

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef } from 'react'
 import { createScene, type OfficeScene } from '@/lib/office/scene'
+import { terapkanDenah } from '@/lib/office/layout'
+import { rebuildNav } from '@/lib/office/nav'
 import { useOffice } from '@/lib/store'
 
 type Props = { onScene: (s: OfficeScene | null) => void }
@@ -12,6 +14,11 @@ export default function Scene3D({ onScene }: Props) {
   const sceneRef = useRef<OfficeScene | null>(null)
 
   const agents = useOffice((s) => s.agents)
+  const denah = useOffice((s) => s.denah)
+  // Sidik denah: gedung dibangun ULANG hanya kalau susunan ruangan benar-benar
+  // berubah. Memakai objek denah sebagai dependensi akan membangun ulang tiap
+  // polling empat detik, karena tiap jawaban JSON adalah objek baru.
+  const sidikDenah = denah ? JSON.stringify(denah.map((r) => [r.kunci, r.meja])) : ''
   const tasks = useOffice((s) => s.tasks)
   const meeting = useOffice((s) => s.meeting)
   const view = useOffice((s) => s.view)
@@ -21,6 +28,16 @@ export default function Scene3D({ onScene }: Props) {
 
   useEffect(() => {
     if (!canvasRef.current || !labelRef.current) return
+    // Gedung baru dibangun SETELAH rencana ruangan tiba. Membangunnya lebih dulu
+    // dari denah bawaan berarti satu ruangan berisi delapan meja muncul sekejap
+    // lalu dibongkar -- dan selama itu nomor meja dari server menunjuk kursi yang
+    // belum ada.
+    if (!denah || denah.length === 0) return
+    // Urutannya mengikat: denah dulu, lalu grid jalan, baru gedung. nav.ts
+    // membaca FOOTPRINTS yang baru ditugaskan terapkanDenah(), dan buildOffice
+    // membaca keduanya.
+    terapkanDenah(denah)
+    rebuildNav()
     const scene = createScene(canvasRef.current, labelRef.current, {
       onMonitorClick: (desk) => setPeek(desk),
       onAvatarClick: (name) => select(name),
@@ -46,9 +63,10 @@ export default function Scene3D({ onScene }: Props) {
       sceneRef.current = null
       onScene(null)
     }
-    // deliberately once: the scene outlives individual state updates
+    // Dibangun ulang HANYA saat susunan ruangan berubah -- bukan tiap pembaruan
+    // roster, yang masuk lewat syncAgents di bawah tanpa menyentuh gedung.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [sidikDenah])
 
   // push new rosters in without rebuilding the world
   useEffect(() => {

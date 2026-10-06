@@ -23,6 +23,7 @@
  *   GREENPARK_DIVISI   tampilkan satu divisi saja, mis. "teknik" (opsional)
  */
 import type { Agent, AgentRole, Task, TaskStatus } from '@/types/hermes'
+import { DIVISI_INTI } from './denah'
 
 const BASIS = (process.env.GREENPARK_API || '').replace(/\/+$/, '')
 const DIVISI = (process.env.GREENPARK_DIVISI || '').trim().toLowerCase()
@@ -156,21 +157,60 @@ async function papan(): Promise<GPPapan> {
  * nilai yang salah.
  */
 const petaNama = new Map<string, string>()
-const petaDivisi = new Map<string, string>()
+/** SEMUA divisi orang itu. Satu orang bisa berada di beberapa sekaligus --
+ *  seorang direktur muncul di hampir semuanya -- dan auth mengirim SATU BARIS
+ *  per pasangan (orang, divisi): 68 baris untuk 34 orang. Menyimpannya sebagai
+ *  satu nilai per username membuat baris terakhir menimpa yang sebelumnya, dan
+ *  penyaring divisi lalu membuang orang yang sebenarnya anggota. */
+const petaDivisiBanyak = new Map<string, Set<string>>()
+/** Divisi RUMAH: yang pertama dikirim auth untuk orang itu. Dipakai saat tidak
+ *  ada penyaring, supaya tiap orang menempati tepat satu ruangan -- bukan
+ *  muncul berkali-kali di gedung yang sama. */
+const petaDivisiUtama = new Map<string, string>()
 
 function isiPetaOrang(p: GPPapan) {
+  petaDivisiBanyak.clear()
+  petaDivisiUtama.clear()
   for (const u of p.users ?? []) {
     if (!u.username) continue
     if (u.name) petaNama.set(u.username, u.name)
-    if (u.division) petaDivisi.set(u.username, u.division.toLowerCase())
+    if (!u.division) continue
+    const d = u.division.toLowerCase()
+    let himpunan = petaDivisiBanyak.get(u.username)
+    if (!himpunan) {
+      himpunan = new Set<string>()
+      petaDivisiBanyak.set(u.username, himpunan)
+    }
+    himpunan.add(d)
+    if (!petaDivisiUtama.has(u.username)) petaDivisiUtama.set(u.username, d)
   }
+}
+
+/** Divisi yang menentukan ruangan dan warna orang itu.
+ *
+ * Urutannya: penyaring yang sedang aktif, lalu divisi rumah, lalu -- kalau
+ * divisi rumah itu ternyata tidak punya ruangan -- divisi pertama yang punya.
+ *
+ * Langkah terakhir itu bukan hiasan. Akun lintas-divisi (direktur, admin)
+ * sering terdaftar lebih dulu di divisi yang tak berruangan seperti
+ * `digitalmarketing` atau `departemen`, dan tanpa kemunduran ini mereka berdiri
+ * di kantornya sendiri tanpa kursi -- padahal mereka anggota semua divisi inti.
+ * Yang divisi rumahnya SUDAH punya ruangan tidak terpengaruh sama sekali.
+ */
+function divisiTampil(username: string): string | null {
+  const punya = petaDivisiBanyak.get(username)
+  if (DIVISI && punya?.has(DIVISI)) return DIVISI
+  const rumah = petaDivisiUtama.get(username) ?? null
+  const punyaRuangan = (d: string | null) => !!d && DIVISI_INTI.some((x) => x.kunci === d)
+  if (punyaRuangan(rumah)) return rumah
+  if (punya) for (const d of DIVISI_INTI) if (punya.has(d.kunci)) return d.kunci
+  return rumah
 }
 
 /** Divisi seseorang sebagai peran kantor, atau null bila tidak dikenal. */
 export function gpRole(username: string): AgentRole | null {
   if (!greenparkAktif()) return null
-  const d = petaDivisi.get(username)
-  return (d as AgentRole) || null
+  return (divisiTampil(username) as AgentRole) || null
 }
 
 /** Nama asli orang itu; `null` berarti pakai username apa adanya. */
@@ -182,7 +222,7 @@ export function gpDisplay(username: string): string | null {
 /** Benar bila orang ini termasuk divisi yang sedang ditampilkan. */
 function dalamDivisi(username: string): boolean {
   if (!DIVISI) return true
-  return petaDivisi.get(username) === DIVISI
+  return petaDivisiBanyak.get(username)?.has(DIVISI) === true
 }
 
 // --- yang dipakai kanban.ts -------------------------------------------------
@@ -229,8 +269,16 @@ export async function gpAssignees(): Promise<{ name: string; onDisk: boolean; to
   const jumlah = new Map<string, number>()
   for (const t of tugas) if (t.assignee) jumlah.set(t.assignee, (jumlah.get(t.assignee) ?? 0) + 1)
 
+  // Dideduplikasi: auth mengirim satu baris per keanggotaan divisi, jadi tanpa
+  // ini seorang direktur muncul sebagai sembilan orang berbeda di lantai.
+  const sudahDidaftar = new Set<string>()
   return (p.users ?? [])
-    .filter((u) => u.username && dalamDivisi(u.username))
+    .filter((u) => {
+      if (!u.username || !dalamDivisi(u.username)) return false
+      if (sudahDidaftar.has(u.username)) return false
+      sudahDidaftar.add(u.username)
+      return true
+    })
     .map((u) => ({
       name: u.username,
       // `onDisk` di Hermes berarti "profil ini sungguh ada", bukan sekadar nama
@@ -240,6 +288,21 @@ export async function gpAssignees(): Promise<{ name: string; onDisk: boolean; to
       total: jumlah.get(u.username) ?? 0,
     }))
     .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/**
+ * Keanggotaan mentah: satu baris per pasangan (orang, divisi), persis bentuk
+ * yang diminta susunDenah.
+ *
+ * Sengaja TIDAK diturunkan dari petaDivisiUtama. Peta itu hanya terisi setelah
+ * papan() dipanggil, jadi memakainya di sini membuat denah bergantung pada
+ * urutan pemanggilan -- dan kegagalannya berupa gedung tanpa ruangan, bukan
+ * galat. Memanggil papan() sendiri lebih jujur, dan singgahan tiga detik
+ * membuatnya tidak menambah satu pun permintaan HTTP.
+ */
+export async function gpKeanggotaan(): Promise<{ username: string; division?: string }[]> {
+  const p = await papan()
+  return (p.users ?? []).map((u) => ({ username: u.username, division: u.division }))
 }
 
 /** Nama-nama yang boleh menempati kantor. */

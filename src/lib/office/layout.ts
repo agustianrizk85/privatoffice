@@ -16,9 +16,17 @@ import type { AgentRole } from '@/types/hermes'
  * Units: 1 = 1 metre. +X east, +Z south, +Y up. Origin at the office centre.
  */
 
-export const FLOOR = { width: 34, depth: 26 }
-export const HALF_W = FLOOR.width / 2
-export const HALF_D = FLOOR.depth / 2
+/**
+ * Ukuran lantai. `let`, bukan `const`: lebarnya mengikuti jumlah ruang kerja,
+ * dan jumlah ruang kerja baru diketahui setelah roster tiba.
+ *
+ * Pengikatan ekspor ES bersifat hidup, jadi pembaca di berkas lain melihat
+ * nilai barunya tanpa perubahan apa pun -- ASALKAN mereka membacanya saat
+ * dipanggil, bukan menyalinnya ke konstanta sendiri saat modul dimuat.
+ */
+export let FLOOR = { width: 34, depth: 26 }
+export let HALF_W = FLOOR.width / 2
+export let HALF_D = FLOOR.depth / 2
 // 4.6 m: the window bands sit at y 2.65-4.55, so a 3.4 m wall left the cut-out
 // ABOVE the wall line and no opening was ever formed.
 export const WALL_H = 4.6
@@ -38,24 +46,48 @@ export const WALL_T = 0.3
  *   |          pintu masuk, resepsionis         |
  *   +-------------------------------------------+
  */
-export const ROOMS = {
+export type Kotak = { x1: number; x2: number; z1: number; z2: number }
+
+/** Satu ruang kerja divisi: kotaknya, pintunya, dan meja-meja miliknya. */
+export type RuangKerja = Kotak & {
+  kunci: string
+  nama: string
+  pintu: { x: number; width: number }
+  /** Nomor meja global pertama di ruangan ini. */
+  mejaAwal: number
+  jumlahMeja: number
+  kolom: number
+}
+
+/** Pita utara dibagi: [ RAPAT | divisi 1..N | LOUNGE ], lobi selebar gedung. */
+export let RUANG_KERJA: RuangKerja[] = []
+
+// `as const` DIBUANG. Ia menyempitkan -6.0/6.0/3.4 jadi tipe literal dan
+// menjadikan setiap field readonly -- dua hal yang membuat nilai hasil
+// hitungan runtime mustahil ditugaskan.
+export let ROOMS: Record<string, Kotak> = {
   meeting: { x1: -HALF_W + WALL_T, x2: -6.0, z1: -HALF_D + WALL_T, z2: 3.4 },
   work: { x1: -6.0, x2: 6.0, z1: -HALF_D + WALL_T, z2: 3.4 },
   lounge: { x1: 6.0, x2: HALF_W - WALL_T, z1: -HALF_D + WALL_T, z2: 3.4 },
   lobby: { x1: -HALF_W + WALL_T, x2: HALF_W - WALL_T, z1: 3.4, z2: HALF_D - WALL_T },
-} as const
+}
 
 /** Doorway openings in the south wall of each room, facing the lobby. */
-export const ROOM_DOORS = {
+export let ROOM_DOORS: Record<string, { x: number; width: number }> = {
   meeting: { x: -11.0, width: 2.2 },
   work: { x: 0, width: 3.4 },
   lounge: { x: 11.0, width: 2.2 },
-} as const
+}
 
 /* ------------------------------------------------------------------ desks -- */
 
-export const DESK_COLUMNS = [-4.6, -1.55, 1.55, 4.6] as const
-export const DESK_ROW_Z = { far: -8.2, near: -4.8 } as const
+/** Jarak antar meja. Dipakai untuk menghitung lebar ruangan dari jumlah meja,
+ *  jadi mengubahnya di sini ikut melebarkan gedung -- bukan menumpuk meja. */
+export const PITCH_MEJA = 3.05
+export const PITCH_BARIS = 3.4
+/** Paling banyak empat kolom; lebih dari itu ruangan jadi terlalu lebar untuk
+ *  dibaca sekali pandang, dan barisnya yang lebih baik bertambah. */
+export const MAKS_KOLOM = 4
 
 export type Desk = {
   index: number
@@ -65,13 +97,48 @@ export type Desk = {
   facing: number
   column: number
   side: 'near' | 'far'
+  /** Kunci divisi pemilik meja ini. */
+  room?: string
 }
 
-/** 8 stations. Rows face each other across the aisle at z = -6.5. */
-export const DESKS: Desk[] = DESK_COLUMNS.flatMap((x, column) => [
-  { index: column + 4, x, z: DESK_ROW_Z.far, facing: Math.PI, column, side: 'far' as const },
-  { index: column, x, z: DESK_ROW_Z.near, facing: 0, column, side: 'near' as const },
-])
+/** Semua meja di gedung, dari semua ruangan, dengan nomor global berurut. */
+export let DESKS: Desk[] = []
+
+/** Berapa kolom untuk n meja: mendekati bujur sangkar, dibatasi MAKS_KOLOM. */
+export function kolomUntuk(n: number): number {
+  return Math.max(1, Math.min(MAKS_KOLOM, Math.ceil(Math.sqrt(Math.max(1, n) * 1.2))))
+}
+
+/** Lebar dalam ruangan untuk n meja, termasuk sirkulasi di kiri-kanan. */
+export function lebarRuangUntuk(n: number): number {
+  return Math.max(4.2, kolomUntuk(n) * PITCH_MEJA + 1.2)
+}
+
+/** Tata meja di dalam satu ruangan, menghadap selatan dan utara berselang-seling
+ *  seperti kantor aslinya. Nomor meja = mejaAwal + urutan, SAMA PERSIS dengan
+ *  rumus di lib/greenpark/denah.ts -- itulah yang membuat nomor meja dari server
+ *  dan geometri dari klien tidak pernah bisa menunjuk kursi yang berbeda. */
+export function mejaUntukRuang(r: RuangKerja): Desk[] {
+  const out: Desk[] = []
+  const pusatX = (r.x1 + r.x2) / 2
+  const lebarIsi = (r.kolom - 1) * PITCH_MEJA
+  const zAwal = r.z1 + 2.6
+  for (let k = 0; k < r.jumlahMeja; k++) {
+    const kol = k % r.kolom
+    const bar = Math.floor(k / r.kolom)
+    const menghadapUtara = bar % 2 === 1
+    out.push({
+      index: r.mejaAwal + k,
+      x: pusatX - lebarIsi / 2 + kol * PITCH_MEJA,
+      z: zAwal + bar * PITCH_BARIS,
+      facing: menghadapUtara ? Math.PI : 0,
+      column: kol,
+      side: menghadapUtara ? 'far' : 'near',
+      room: r.kunci,
+    })
+  }
+  return out
+}
 
 /**
  * Chair and sitter share these numbers. The chair group sits at z = +1.0 with its
@@ -585,22 +652,23 @@ const fp = (id: string, x: number, z: number, hw: number, hd: number, h: number,
   ({ id, x, z, hw, hd, h, kind })
 
 /** Every solid placed in build.ts. Kept here so the plan can be validated. */
-export const FOOTPRINTS: Footprint[] = [
+/** Semua jejak tabrakan di gedung. Diisi terapkanDenah(). */
+export let FOOTPRINTS: Footprint[] = []
+
+/** Jejak perabot & struktur yang TIDAK bergantung jumlah ruangan.
+ *  Dihitung ulang tiap denah berubah karena isinya membaca HALF_W/HALF_D dan
+ *  ROOMS -- yang kini berubah-ubah. */
+function jejakTetap(): Footprint[] {
+  return [
   // ---- outer walls (as four slabs)
   fp('wall-n', 0, -HALF_D, HALF_W, WALL_T / 2, WALL_H, 'wall'),
   fp('wall-s', 0, HALF_D, HALF_W, WALL_T / 2, WALL_H, 'wall'),
   fp('wall-w', -HALF_W, 0, WALL_T / 2, HALF_D, WALL_H, 'wall'),
   fp('wall-e', HALF_W, 0, WALL_T / 2, HALF_D, WALL_H, 'wall'),
 
-  // ---- interior partitions, each split around its doorway
-  fp('part-mtg-n', ROOMS.meeting.x2 - 0.075, (-13 + ROOMS.meeting.z2) / 2, 0.075, (ROOMS.meeting.z2 + 13) / 2, WALL_H, 'wall'),
-  fp('part-lng-n', ROOMS.lounge.x1 + 0.075, (-13 + ROOMS.lounge.z2) / 2, 0.075, (ROOMS.lounge.z2 + 13) / 2, WALL_H, 'wall'),
-  fp('part-mtg-s-a', -16.6, ROOMS.meeting.z2, 0.8, 0.075, WALL_H, 'wall'),
-  fp('part-mtg-s-b', -9.6, ROOMS.meeting.z2, 2.4, 0.075, WALL_H, 'wall'),
-  fp('part-wrk-s-a', -3.4, ROOMS.work.z2, 2.9, 0.075, WALL_H, 'wall'),
-  fp('part-wrk-s-b', 3.4, ROOMS.work.z2, 2.9, 0.075, WALL_H, 'wall'),
-  fp('part-lng-s-a', 9.6, ROOMS.lounge.z2, 2.4, 0.075, WALL_H, 'wall'),
-  fp('part-lng-s-b', 16.6, ROOMS.lounge.z2, 0.8, 0.075, WALL_H, 'wall'),
+  // Partisi antar-ruang TIDAK lagi di sini: jumlahnya mengikuti jumlah ruang
+  // kerja, jadi dibangkitkan jejakRuangKerja(). Delapan baris yang dulu di
+  // tempat ini hanya benar untuk denah tiga ruangan di lantai 34 m.
 
   // ---- desks: 2.0 x 1.0 tops, plus the chair behind each
   ...DESKS.flatMap((d) => {
@@ -729,7 +797,8 @@ export const FOOTPRINTS: Footprint[] = [
   fp('lng-console', LOUNGE.x, LOUNGE.z + 1.2, 0.9, 0.28, 0.78),
   fp('lng-planter', LOUNGE.x + 3.6, LOUNGE.z + 0.8, 0.42, 0.42, 2.4),
   fp('lng-pouf', LOUNGE.x - 2.1, LOUNGE.z - 3.9, 0.4, 0.4, 0.42, 'seat'),
-]
+  ]
+}
 
 /* ------------------------------------------------------------------ spots -- */
 
@@ -756,7 +825,10 @@ export type IdleSpot = {
   face: number
 }
 
-export const IDLE_SPOTS: IdleSpot[] = [
+export let IDLE_SPOTS: IdleSpot[] = []
+
+function titikSantai(): IdleSpot[] {
+  return [
   // sofa: sit on the seat, look at the TV wall to the north
   { x: LOUNGE.x - 1.1, z: LOUNGE.z - 1.45, act: 'sofa', seated: true, face: Math.PI },
   // dartboard: stand at the throw line, facing the board on the east wall
@@ -778,15 +850,147 @@ export const IDLE_SPOTS: IdleSpot[] = [
   // reception: the VISITOR side of the counter (the chair occupies the staff side)
   { x: -8.4, z: 9.6, act: 'idle', face: Math.PI },
   { x: 9.4, z: 0.6, act: 'idle', face: Math.PI / 2 }, // lounge entry
-]
+  ]
+}
 
 /** Doorway openings so the walkable graph knows where it may pass. */
-export const OPENINGS: { x: number; z: number; hw: number; hd: number }[] = [
-  { x: ROOM_DOORS.meeting.x, z: ROOMS.meeting.z2, hw: ROOM_DOORS.meeting.width / 2, hd: 0.3 },
-  { x: ROOM_DOORS.work.x, z: ROOMS.work.z2, hw: ROOM_DOORS.work.width / 2, hd: 0.3 },
-  { x: ROOM_DOORS.lounge.x, z: ROOMS.lounge.z2, hw: ROOM_DOORS.lounge.width / 2, hd: 0.3 },
-  { x: DOOR.x, z: DOOR.z, hw: 1.7, hd: 0.3 },
-]
+export let OPENINGS: { x: number; z: number; hw: number; hd: number }[] = []
+
+/** Lubang pintu, supaya graf jalan tahu di mana ia boleh lewat.
+ *
+ *  Setengah-lebar pintu WAJIB lebih besar dari radius badan avatar. nav.ts
+ *  menguji |x - pintu.x| < hw - BODY_R, jadi pintu dengan hw <= BODY_R tidak
+ *  melubangi apa pun dan ruangannya tertutup rapat -- tanpa satu pun galat.
+ *  Itu sebabnya lebar pintu di bawah punya lantai 2.0 m. */
+function lubangPintu(): { x: number; z: number; hw: number; hd: number }[] {
+  const out = [
+    { x: ROOM_DOORS.meeting.x, z: ROOMS.meeting.z2, hw: ROOM_DOORS.meeting.width / 2, hd: 0.3 },
+    { x: ROOM_DOORS.lounge.x, z: ROOMS.lounge.z2, hw: ROOM_DOORS.lounge.width / 2, hd: 0.3 },
+    { x: DOOR.x, z: DOOR.z, hw: 1.7, hd: 0.3 },
+  ]
+  for (const r of RUANG_KERJA) {
+    out.push({ x: r.pintu.x, z: r.z2, hw: r.pintu.width / 2, hd: 0.3 })
+  }
+  return out
+}
+
+/* ------------------------------------------------- menyusun ulang denah -- */
+
+/**
+ * Susun ulang SELURUH denah dari rencana ruangan.
+ *
+ * Dipanggil sekali saat modul dimuat (dengan denah bawaan) dan lagi tiap kali
+ * daftar divisi berubah. Semua yang ditugaskan di sini adalah `export let`,
+ * jadi pembaca di berkas lain ikut melihat nilai barunya -- kecuali yang
+ * menyalinnya saat modul dimuat, dan itulah satu-satunya hal yang perlu
+ * diwaspadai saat memigrasi pemanggil.
+ */
+export function terapkanDenah(
+  ruangan: { kunci: string; nama: string; meja: number; mejaAwal: number }[],
+): void {
+  const DALAM_PITA = { z1: 0, z2: 3.4 }
+  const LEBAR_RAPAT = 12
+  const LEBAR_LOUNGE = 10
+
+  const lebar = ruangan.map((r) => lebarRuangUntuk(r.meja))
+  const totalDalam = LEBAR_RAPAT + LEBAR_LOUNGE + lebar.reduce((a, b) => a + b, 0)
+  // Kedalaman mengikuti ruangan dengan baris terbanyak, supaya meja baris
+  // terakhir tidak menembus dinding utara.
+  const barisMaks = ruangan.reduce(
+    (m, r) => Math.max(m, Math.ceil(r.meja / kolomUntuk(r.meja))),
+    2,
+  )
+  const dalamPita = Math.max(16, barisMaks * PITCH_BARIS + 5.0)
+
+  FLOOR = { width: totalDalam + 2 * WALL_T, depth: dalamPita + 10 }
+  HALF_W = FLOOR.width / 2
+  HALF_D = FLOOR.depth / 2
+  DALAM_PITA.z1 = -HALF_D + WALL_T
+  DALAM_PITA.z2 = DALAM_PITA.z1 + dalamPita
+
+  let x = -HALF_W + WALL_T
+  const rapat = { x1: x, x2: x + LEBAR_RAPAT, z1: DALAM_PITA.z1, z2: DALAM_PITA.z2 }
+  x += LEBAR_RAPAT
+
+  RUANG_KERJA = ruangan.map((r, i) => {
+    const x1 = x
+    const x2 = x + lebar[i]
+    x = x2
+    const kolom = kolomUntuk(r.meja)
+    return {
+      kunci: r.kunci,
+      nama: r.nama,
+      x1,
+      x2,
+      z1: DALAM_PITA.z1,
+      z2: DALAM_PITA.z2,
+      pintu: {
+        x: (x1 + x2) / 2,
+        width: Math.max(2.0, Math.min(3.4, (x2 - x1) * 0.6)),
+      },
+      mejaAwal: r.mejaAwal,
+      jumlahMeja: r.meja,
+      kolom,
+    }
+  })
+
+  const lounge = { x1: x, x2: x + LEBAR_LOUNGE, z1: DALAM_PITA.z1, z2: DALAM_PITA.z2 }
+
+  ROOMS = {
+    meeting: rapat,
+    // `work` dipertahankan sebagai ruang kerja PERTAMA supaya kode lama yang
+    // menulis ROOMS.work tetap menunjuk sesuatu yang masuk akal selama migrasi.
+    work: RUANG_KERJA[0]
+      ? { x1: RUANG_KERJA[0].x1, x2: RUANG_KERJA[0].x2, z1: DALAM_PITA.z1, z2: DALAM_PITA.z2 }
+      : rapat,
+    lounge,
+    lobby: { x1: -HALF_W + WALL_T, x2: HALF_W - WALL_T, z1: DALAM_PITA.z2, z2: HALF_D - WALL_T },
+  }
+  for (const r of RUANG_KERJA) ROOMS[r.kunci] = { x1: r.x1, x2: r.x2, z1: r.z1, z2: r.z2 }
+
+  ROOM_DOORS = {
+    meeting: { x: (rapat.x1 + rapat.x2) / 2, width: 2.6 },
+    work: RUANG_KERJA[0] ? RUANG_KERJA[0].pintu : { x: 0, width: 2.6 },
+    lounge: { x: (lounge.x1 + lounge.x2) / 2, width: 2.6 },
+  }
+  for (const r of RUANG_KERJA) ROOM_DOORS[r.kunci] = r.pintu
+
+  DESKS = RUANG_KERJA.flatMap(mejaUntukRuang)
+  FOOTPRINTS = [...jejakTetap(), ...jejakRuangKerja()]
+  IDLE_SPOTS = titikSantai()
+  OPENINGS = lubangPintu()
+}
+
+/** Dinding pemisah antar ruang kerja + potongan dinding selatan di kiri-kanan
+ *  tiap pintu, dan jejak tiap meja. Satu sumber untuk tabrakan; bentuk 3D-nya
+ *  dibangun dari daftar RUANG_KERJA yang sama. */
+function jejakRuangKerja(): Footprint[] {
+  const out: Footprint[] = []
+  for (const r of RUANG_KERJA) {
+    const tinggiPita = (r.z2 - r.z1) / 2
+    const tengahZ = (r.z1 + r.z2) / 2
+    out.push(fp('part-' + r.kunci + '-w', r.x1, tengahZ, WALL_T / 2, tinggiPita, WALL_H, 'wall'))
+    const kiriLebar = (r.pintu.x - r.pintu.width / 2 - r.x1) / 2
+    const kananLebar = (r.x2 - (r.pintu.x + r.pintu.width / 2)) / 2
+    if (kiriLebar > 0.05) {
+      out.push(fp('part-' + r.kunci + '-s-a', r.x1 + kiriLebar, r.z2, kiriLebar, WALL_T / 2, WALL_H, 'wall'))
+    }
+    if (kananLebar > 0.05) {
+      out.push(fp('part-' + r.kunci + '-s-b', r.x2 - kananLebar, r.z2, kananLebar, WALL_T / 2, WALL_H, 'wall'))
+    }
+  }
+  const terakhir = RUANG_KERJA[RUANG_KERJA.length - 1]
+  if (terakhir) {
+    const tinggiPita = (terakhir.z2 - terakhir.z1) / 2
+    const tengahZ = (terakhir.z1 + terakhir.z2) / 2
+    out.push(fp('part-lng-w', terakhir.x2, tengahZ, WALL_T / 2, tinggiPita, WALL_H, 'wall'))
+  }
+  // Jejak meja & kursi sengaja TIDAK dibuat di sini: jejakTetap() sudah
+  // membangunnya dari DESKS -- yang kini dinamis -- dengan ukuran sebenarnya
+  // dan posisi kursi dari DESK_CHAIR. Membuatnya dua kali berarti dua jejak
+  // bertumpuk di tiap meja.
+  return out
+}
 
 /* -------------------------------------------------------------- validation -- */
 
@@ -883,3 +1087,23 @@ export const ROLE_COLORS: Record<AgentRole, number> = {
   kpr: 0x0d9488,
   departemen: 0x64748b,
 }
+
+/* ----------------------------------------------------------- denah awal -- */
+
+/**
+ * Denah bawaan: SATU ruang kerja berisi delapan meja -- bentuk kantor ini
+ * sebelum ruangan mengikuti divisi.
+ *
+ * Dipanggil di AKHIR berkas, bukan di dekat definisinya. jejakTetap() membaca
+ * puluhan konstanta perabot (CONFERENCE, LOUNGE, PANTRY, ...) yang dideklarasikan
+ * di bawah; memanggilnya lebih awal berarti membaca binding yang belum
+ * terinisialisasi -- ReferenceError saat impor, bukan galat kompilasi.
+ *
+ * Begitu roster tiba, terapkanDenah() dipanggil lagi dengan daftar divisi yang
+ * sesungguhnya dan semua ekspor di berkas ini ditugaskan ulang.
+ */
+export const DENAH_BAWAAN = [
+  { kunci: 'work', nama: 'RUANG KERJA', meja: 8, mejaAwal: 0 },
+]
+
+terapkanDenah(DENAH_BAWAAN)

@@ -34,6 +34,8 @@ import {
   FRAME_D,
   RECEPTION,
   ROOMS,
+  ROOM_DOORS,
+  RUANG_KERJA,
   WALL_H,
   WALL_T,
   NORTH_WINDOWS,
@@ -692,7 +694,10 @@ function artTexture(seed: number) {
 
 export type OfficeProps = {
   group: THREE.Group
-  monitors: THREE.Mesh[]
+  /** Berkunci desk.index, BUKAN urutan array. DESKS dibangun dengan flatMap
+   *  per kolom sehingga urutannya far,near,far,near -- DESKS[0] adalah meja 4.
+   *  Selama ini monitors[deskIndex] karena itu menyalakan layar meja lain. */
+  monitors: Map<number, THREE.Mesh>
   lamps: THREE.PointLight[]
   boardSurface: THREE.Mesh
   streaks: THREE.Mesh[]
@@ -885,7 +890,12 @@ export function buildOffice(scene: THREE.Scene, hour: number) {
 
   // interior partitions, each with a doorway to the lobby
   // west/east room dividers run north-south, full length of the room band
-  for (const px of [ROOMS.work.x1, ROOMS.work.x2]) {
+  // Satu pemisah di tiap tepi ruang kerja: tepi kirinya, plus tepi kanan ruang
+  // terakhir. Dulu hanya dua (x1 dan x2 dari satu-satunya ruang kerja).
+  const tepi = RUANG_KERJA.length
+    ? [...RUANG_KERJA.map((r) => r.x1), RUANG_KERJA[RUANG_KERJA.length - 1].x2]
+    : [ROOMS.work.x1, ROOMS.work.x2]
+  for (const px of tepi) {
     const z1 = -HALF_D + WALL_T
     const z2 = ROOMS.work.z2
     const m = new THREE.Mesh(new THREE.BoxGeometry(WALL_T, WALL_H, z2 - z1), wallMat)
@@ -906,9 +916,14 @@ export function buildOffice(scene: THREE.Scene, hour: number) {
       group.add(m)
     }
   }
-  roomSouthWall(ROOMS.meeting.x1, ROOMS.meeting.x2, -11.0, 2.2)
-  roomSouthWall(ROOMS.work.x1, ROOMS.work.x2, 0, 3.4)
-  roomSouthWall(ROOMS.lounge.x1, ROOMS.lounge.x2, 11.0, 2.2)
+  // Posisi dan lebar pintu dibaca dari ROOM_DOORS, bukan ditulis angka. Dulu
+  // -11.0/0/11.0 di sini dan -16.6/-9.6/... di layout.ts adalah DUA sumber
+  // kebenaran untuk satu dinding: bentuk 3D dari sini, tabrakannya dari sana.
+  roomSouthWall(ROOMS.meeting.x1, ROOMS.meeting.x2, ROOM_DOORS.meeting.x, ROOM_DOORS.meeting.width)
+  for (const r of RUANG_KERJA) {
+    roomSouthWall(r.x1, r.x2, r.pintu.x, r.pintu.width)
+  }
+  roomSouthWall(ROOMS.lounge.x1, ROOMS.lounge.x2, ROOM_DOORS.lounge.x, ROOM_DOORS.lounge.width)
 
   /* ------------------------------------------------------------ windows --- */
   const glassMat = track(
@@ -1444,7 +1459,7 @@ export function buildOffice(scene: THREE.Scene, hour: number) {
   }
 
   /* -------------------------------------------------------------- desks --- */
-  const monitors: THREE.Mesh[] = []
+  const monitors = new Map<number, THREE.Mesh>()
   const lamps: THREE.PointLight[] = []
 
   for (const desk of DESKS) {
@@ -1501,7 +1516,7 @@ export function buildOffice(scene: THREE.Scene, hour: number) {
     screen.userData = { kind: 'monitor', deskIndex: desk.index }
     screen.name = `monitor-${desk.index}`
     d.add(screen)
-    monitors.push(screen)
+    monitors.set(desk.index, screen)
 
     const kb = box(0.56, 0.02, 0.18, 0x333a3f)
     kb.position.set(0, 0.765, 0.14)
@@ -1708,7 +1723,10 @@ export function buildOffice(scene: THREE.Scene, hour: number) {
 
   // pantry counter with small appliances
   const pantry = new THREE.Group()
-  pantry.position.set(14.4, 0, 1.0)
+  // Dulu 14.4 / 1.0 ditulis harfiah padahal PANTRY sudah diimpor. Dua sumber
+  // kebenaran untuk satu benda: jejak tabrakannya memakai PANTRY, bentuknya
+  // memakai angka -- begitu salah satunya bergeser, avatar menabrak udara.
+  pantry.position.set(PANTRY.x, 0, PANTRY.z)
   const counter = box(2.5, 0.9, 0.62, 0xdcc9ab, { rough: 0.6 })
   counter.position.y = 0.45
   pantry.add(counter)

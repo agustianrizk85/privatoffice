@@ -9,6 +9,9 @@ const POLL_MS = Number(process.env.NEXT_PUBLIC_POLL_MS || 4000)
 type State = {
   tasks: Task[]
   agents: Agent[]
+  /** Rencana ruangan dari server: satu entri per divisi berikut jumlah mejanya.
+   *  null berarti kantor tidak sedang memakai data Greenpark. */
+  denah: { kunci: string; nama: string; meja: number; mejaAwal: number }[] | null
   meeting: Meeting | null
   meetingConfigured: boolean
   /** Archived meetings on disk, newest first. */
@@ -36,6 +39,7 @@ type State = {
 export const useOffice = create<State>((set) => ({
   tasks: [],
   agents: [],
+  denah: null,
   meeting: null,
   meetingConfigured: false,
   meetingHistory: [],
@@ -49,14 +53,20 @@ export const useOffice = create<State>((set) => ({
   newTaskOpen: false,
 
   async load() {
-    const res = await fetchJson<{ tasks?: Task[]; agents?: Agent[] }>('/api/hermes/tasks', {
+    const res = await fetchJson<{ tasks?: Task[]; agents?: Agent[]; denah?: { ruang: { kunci: string; nama: string; meja: number; mejaAwal: number }[] } | null }>('/api/hermes/tasks', {
       cache: 'no-store',
     })
     if (!res.ok || !res.data) {
       set({ error: res.error || 'gagal memuat papan', loading: false })
       return
     }
-    set({ tasks: res.data.tasks || [], agents: res.data.agents || [], error: null, loading: false })
+    set({
+      tasks: res.data.tasks || [],
+      agents: res.data.agents || [],
+      denah: res.data.denah?.ruang ?? null,
+      error: null,
+      loading: false,
+    })
   },
 
   async refreshMeeting() {

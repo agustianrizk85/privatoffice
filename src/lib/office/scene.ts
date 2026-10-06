@@ -26,6 +26,11 @@ import {
   LOUNGE,
   deskSeatWorld,
   visitorSpot,
+  // dipakai papan nama ruangan
+  ROOMS,
+  RUANG_KERJA,
+  FLOOR,
+  WALL_H,
   IDLE_SPOTS as OFFICE_IDLE_SPOTS,
   type Desk,
 } from './layout'
@@ -154,7 +159,8 @@ export function createScene(
   // A vertical gradient reads as atmosphere; a flat colour reads as paper.
   scene.background = skyGradientTexture()
   // Depth cue: distant blocks wash toward the sky, so the street has depth.
-  scene.fog = new THREE.Fog(0xd3e2ef, 70, 190)
+  // Kabut ikut melebar: jarak tetap 70-190 menelan separuh gedung yang panjang.
+  scene.fog = new THREE.Fog(0xd3e2ef, FLOOR.width * 1.6, FLOOR.width * 4.2)
 
   let hour = Number(
     new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hour12: false, timeZone: 'Asia/Jakarta' })
@@ -165,7 +171,11 @@ export function createScene(
   selectiveShadow(office.streetGroup, office.sun)
 
   const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 400)
-  camera.position.set(0, 21, 24)
+  // Diturunkan dari ukuran lantai, bukan angka tetap. Gedung melebar mengikuti
+  // jumlah ruangan, dan posisi kamera 0,21,24 hanya membingkai lantai 34 m yang
+  // lama -- ruangan di ujung kanan langsung keluar layar.
+  const bentang = Math.max(FLOOR.width, FLOOR.depth)
+  camera.position.set(0, bentang * 0.40, bentang * 0.50)
   const controls = new OrbitControls(camera, renderer.domElement)
   controls.target.set(0, 1.2, 0)
   controls.enableDamping = true
@@ -174,7 +184,7 @@ export function createScene(
   controls.minDistance = 8
   // Clamp zoom-out to the building itself: letting the camera escape shows the
   // empty world box behind the set dressing.
-  controls.maxDistance = 46
+  controls.maxDistance = Math.hypot(FLOOR.width, FLOOR.depth) * 1.3
   controls.enablePan = true
   controls.screenSpacePanning = false
 
@@ -183,11 +193,35 @@ export function createScene(
   {
     const titleEl = document.createElement('div')
     titleEl.className = 'vp-board-title'
-    titleEl.textContent = 'SPRINT · PAPAN KANBAN'
+    titleEl.textContent = 'PAPAN TUGAS · GREENPARK'
     const title = new CSS2DObject(titleEl)
     title.position.set(0, KANBAN_BOARD.h / 2 + 0.26, 0.09)
     office.boardSurface.add(title)
   }
+
+  // ---- papan nama ruangan ---------------------------------------------------
+  // Ruangan di denah ini dirakit tangan dan jumlahnya tetap tiga, jadi namanya
+  // ditempel di atas tiap ruangan, bukan dibangkitkan dari daftar divisi.
+  // Nama ruang kerja diisi belakangan dari divisi orang yang benar-benar ada di
+  // lantai -- lihat syncAgents. Diisi dari data, bukan dari env: env NEXT_PUBLIC
+  // dipanggang saat build, jadi satu citra tidak akan bisa melayani dua divisi.
+  const papanNamaRuang = new Map<string, HTMLDivElement>()
+  function pasangNamaRuang(kunci: string, teks: string, x: number, z: number) {
+    const el = document.createElement("div")
+    el.className = "vp-nama-ruang"
+    el.textContent = teks
+    const o = new CSS2DObject(el)
+    o.position.set(x, WALL_H - 0.5, z)
+    scene.add(o)
+    papanNamaRuang.set(kunci, el)
+  }
+  pasangNamaRuang("meeting", "RUANG RAPAT", (ROOMS.meeting.x1 + ROOMS.meeting.x2) / 2, ROOMS.meeting.z2 - 2)
+  // Satu papan per ruang kerja, bernama divisinya. Tiga panggilan harfiah di
+  // sini dulu hanya benar untuk denah tiga ruangan.
+  for (const r of RUANG_KERJA) {
+    pasangNamaRuang(r.kunci, r.nama, (r.x1 + r.x2) / 2, r.z2 - 2)
+  }
+  pasangNamaRuang("lounge", "LOUNGE", (ROOMS.lounge.x1 + ROOMS.lounge.x2) / 2, ROOMS.lounge.z2 - 2)
 
   // ---- cards pinned to the wall board (child of the board mesh)
   const board = buildBoardCards(office.boardSurface, (taskId) => events.onTaskClick?.(taskId))
@@ -273,7 +307,24 @@ export function createScene(
   }
 
   /** Reconcile the avatar list with the latest agent roster. */
+  /** Divisi yang paling banyak orangnya di lantai, untuk papan ruang kerja.
+   *
+   *  Dipilih yang terbanyak, bukan yang pertama: urutan daftar mengikuti abjad
+   *  nama orang, jadi "yang pertama" akan berganti-ganti tiap kali satu orang
+   *  masuk atau keluar -- papan yang namanya berubah sendiri tanpa sebab. */
+  function divisiTerbanyak(list: Agent[]): string | null {
+    const n = new Map<string, number>()
+    for (const a of list) if (a.role) n.set(a.role, (n.get(a.role) ?? 0) + 1)
+    let menang: string | null = null
+    let banyak = 0
+    for (const [k, v] of n) if (v > banyak) { banyak = v; menang = k }
+    return menang
+  }
+
   function syncAgents(list: Agent[]) {
+    const d = divisiTerbanyak(list)
+    const el = papanNamaRuang.get("work")
+    if (el) el.textContent = d ? d.toUpperCase() : "RUANG KERJA"
     // Removal is deferred: an agent that disappears from the list first walks out
     // of the door, and only despawns once it arrives. `leaving` is what turns a
     // kill into an exit rather than a vanish.
@@ -636,8 +687,9 @@ export function createScene(
       // Monitor glow reflects the occupant's state. The screen itself is NEVER
       // hidden: an invisible mesh is skipped by the raycaster, which would make
       // the "peek at screen" click target unreachable whenever nobody is typing.
-      if (a.data.deskIndex != null && office.monitors[a.data.deskIndex]) {
-        const mat = office.monitors[a.data.deskIndex].material as THREE.MeshStandardMaterial
+      const layar = a.data.deskIndex != null ? office.monitors.get(a.data.deskIndex) : undefined
+      if (layar) {
+        const mat = layar.material as THREE.MeshStandardMaterial
         const st = a.data.status
         const target = st === 'working' ? 1.9 : st === 'review' ? 1.35 : 0.55
         mat.emissiveIntensity += (target - mat.emissiveIntensity) * Math.min(1, dt * 4)
@@ -784,8 +836,25 @@ export function createScene(
     if (raf) cancelAnimationFrame(raf)
     raf = 0
   }
+  /** Papan nama ruangan adalah elemen HTML yang menempel pada titik 3D, jadi ia
+   *  TIDAK ikut hilang saat objek 3D-nya dibuang -- ia tertinggal di DOM. Tanpa
+   *  ini, tiap pembangunan ulang denah meninggalkan satu lapis nama hantu yang
+   *  menumpuk di layar. */
+  function bersihNamaRuang() {
+    for (const el of papanNamaRuang.values()) {
+      el.parentElement?.removeChild(el)
+    }
+    papanNamaRuang.clear()
+  }
+
   function dispose() {
     stop()
+    // office.dispose() SELAMA INI TIDAK PERNAH DIPANGGIL: geometri, bahan, dan
+    // tekstur seluruh gedung tertinggal di memori GPU. Tidak terasa selama
+    // gedungnya hanya dibangun sekali -- tapi denah yang bisa dibangun ulang
+    // menjadikannya kebocoran yang bertambah tiap kali daftar divisi berubah.
+    office.dispose()
+    bersihNamaRuang()
     controls.dispose()
     renderer.domElement.removeEventListener('mousedown', onDown)
     renderer.domElement.removeEventListener('mouseup', onUp)

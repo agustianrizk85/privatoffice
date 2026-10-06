@@ -391,6 +391,19 @@ button.vp-run:hover { border-left-color: #6f8fa3; background: #131c23; }
   text-shadow: 0 0 12px #34d39988;
   white-space: nowrap;
 }
+/* Papan nama ruangan. Kelas tersendiri, bukan menumpang .vp-board-title: nama
+   divisi jauh lebih panjang daripada judul papan, dan dengan sepuluh ruangan
+   berjajar, ukuran judul membuat namanya saling menindih sampai tak terbaca. */
+.vp-nama-ruang {
+  font: 700 10px/1 ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: 0.1em;
+  color: #e8fff4;
+  text-shadow: 0 1px 6px #0f2a1ecc, 0 0 10px #34d39966;
+  white-space: nowrap;
+  padding: 2px 7px;
+  border-radius: 999px;
+  background: #11372788;
+}
 .vp-board-col {
   font: 700 10px/1 ui-monospace, monospace;
   letter-spacing: 0.14em;
