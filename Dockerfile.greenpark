@@ -1,0 +1,21 @@
+# Kantor 3D untuk server Greenpark (202.10.38.100).
+# Dipakai docker-compose-kantor.yml di /opt/apps — network_mode: host seperti
+# backend lain, jadi backend dipanggil lewat 127.0.0.1:<port>, bukan nama container.
+FROM node:20-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY . .
+RUN npm run build
+
+FROM node:20-alpine
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /app/package.json /app/package-lock.json ./
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/.next ./.next
+COPY --from=build /app/next.config.mjs ./
+# Riwayat chat/rapat Hermes — dipasang sebagai volume supaya tidak hilang saat rebuild.
+ENV DATA_DIR=/data
+VOLUME /data
+CMD ["npx", "next", "start", "--hostname", "127.0.0.1", "--port", "3020"]
