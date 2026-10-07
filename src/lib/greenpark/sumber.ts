@@ -22,6 +22,7 @@
  *   GREENPARK_PASS     …dan sandinya, kalau token tetap tidak dipasang
  *   GREENPARK_DIVISI   tampilkan satu divisi saja, mis. "teknik" (opsional)
  */
+import { headers } from 'next/headers'
 import type { Agent, AgentRole, Task, TaskStatus } from '@/types/hermes'
 
 const BASIS = (process.env.GREENPARK_API || '').replace(/\/+$/, '')
@@ -111,9 +112,26 @@ async function token(paksa = false): Promise<string> {
   return tokenSinggahan
 }
 
+/**
+ * Token orang yang membuka kantor, diteruskan dashboard lewat `#token=` lalu
+ * dikirim layar sebagai `Authorization` (lihat `lib/api.ts`). Kalau ada, ia
+ * DIUTAMAKAN di atas akun layanan: kantor menampilkan persis yang boleh dilihat
+ * orang itu. "" di luar sebuah permintaan atau bila layar tidak mengirimnya.
+ */
+async function tokenPengguna(): Promise<string> {
+  try {
+    const a = (await headers()).get('authorization') || ''
+    return a.startsWith('Bearer ') ? a.slice(7).trim() : ''
+  } catch {
+    return ''
+  }
+}
+
 // --- papan ------------------------------------------------------------------
 
-let singgahan: { pada: number; data: GPPapan } | null = null
+/** Singgahan per token — papan satu orang tidak boleh tersaji ke orang lain
+ *  yang haknya berbeda. Kunci "" = akun layanan. */
+const singgahanPer = new Map<string, { pada: number; data: GPPapan }>()
 /**
  * Umur singgahan. Layar Hermes menarik beberapa endpoint tiap 4 detik, dan tiap
  * tarikan memanggil `listTasks` + `listAssignees` + `listProfiles`. Tanpa
@@ -124,7 +142,9 @@ const UMUR_MS = 3_000
 
 async function papan(): Promise<GPPapan> {
   const kini = Date.now()
-  if (singgahan && kini - singgahan.pada < UMUR_MS) return singgahan.data
+  const tp = await tokenPengguna()
+  const ada = singgahanPer.get(tp)
+  if (ada && kini - ada.pada < UMUR_MS) return ada.data
 
   const ambil = async (t: string) =>
     fetch(`${BASIS}/api/board`, {
@@ -132,12 +152,21 @@ async function papan(): Promise<GPPapan> {
       cache: 'no-store',
     })
 
-  let res = await ambil(await token())
-  if (res.status === 401) res = await ambil(await token(true))
+  let res: Response
+  if (tp) {
+    // Sesi orangnya habis: JANGAN jatuh ke akun layanan — itu menampilkan data
+    // di luar hak orang tersebut. Biar layar yang memberi tahu.
+    res = await ambil(tp)
+    if (res.status === 401) throw new Error('Greenpark: sesi dashboard berakhir — buka ulang dari dashboard')
+  } else {
+    res = await ambil(await token())
+    if (res.status === 401) res = await ambil(await token(true))
+  }
   if (!res.ok) throw new Error(`Greenpark: GET /api/board gagal (HTTP ${res.status})`)
 
   const data = (await res.json()) as GPPapan
-  singgahan = { pada: kini, data }
+  if (singgahanPer.size > 50) singgahanPer.clear()
+  singgahanPer.set(tp, { pada: kini, data })
   isiPetaOrang(data)
   return data
 }
@@ -203,7 +232,7 @@ export function gpRole(username: string): AgentRole | null {
  * marketing) -- sudah diuji langsung, bukan diasumsikan. Jadi tidak perlu
  * jembatan token per divisi seperti dulu. */
 export async function gpToken(): Promise<string> {
-  return token()
+  return (await tokenPengguna()) || token()
 }
 
 /** SEMUA divisi yang orang ini menjadi anggotanya.

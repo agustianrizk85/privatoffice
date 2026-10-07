@@ -88,11 +88,43 @@ export async function readJson<T = unknown>(r: Response): Promise<ApiResult<T>> 
  * Fetch and read in one step. Throws only when the reply failed, with a message
  * that names the real cause.
  */
+const KUNCI_TOKEN = 'gp_token'
+
+/**
+ * Token login dashboard Greenpark. Dashboard membuka kantor dengan
+ * `#token=...` (lewat `#` supaya tidak terkirim ke server atau tercatat di log);
+ * di sini ia dipindah ke sessionStorage tab ini lalu dihapus dari alamat supaya
+ * tidak ikut tersalin kalau alamatnya dibagikan.
+ */
+function tokenGreenpark(): string {
+  if (typeof window === 'undefined') return ''
+  try {
+    const dariHash = new URLSearchParams(window.location.hash.slice(1)).get('token')
+    if (dariHash) {
+      sessionStorage.setItem(KUNCI_TOKEN, dariHash)
+      history.replaceState(null, '', window.location.pathname + window.location.search)
+    }
+    return sessionStorage.getItem(KUNCI_TOKEN) || ''
+  } catch {
+    return ''
+  }
+}
+// Ambil secepatnya, sebelum ada yang sempat mengubah alamat.
+tokenGreenpark()
+
 export async function fetchJson<T = unknown>(
   input: string,
   init?: RequestInit,
 ): Promise<ApiResult<T>> {
   try {
+    // Hanya ke rute kantor sendiri (alamat relatif) — token tidak dikirim ke
+    // pihak lain.
+    const t = input.startsWith('/') ? tokenGreenpark() : ''
+    if (t) {
+      const h = new Headers(init?.headers)
+      if (!h.has('Authorization')) h.set('Authorization', `Bearer ${t}`)
+      init = { ...init, headers: h }
+    }
     const r = await fetch(input, init)
     return await readJson<T>(r)
   } catch (e) {
