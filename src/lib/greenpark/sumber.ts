@@ -153,22 +153,60 @@ async function papan(): Promise<GPPapan> {
     })
 
   let res: Response
+  let t: string
   if (tp) {
     // Sesi orangnya habis: JANGAN jatuh ke akun layanan — itu menampilkan data
     // di luar hak orang tersebut. Biar layar yang memberi tahu.
-    res = await ambil(tp)
+    t = tp
+    res = await ambil(t)
     if (res.status === 401) throw new Error('Greenpark: sesi dashboard berakhir — buka ulang dari dashboard')
   } else {
-    res = await ambil(await token())
-    if (res.status === 401) res = await ambil(await token(true))
+    t = await token()
+    res = await ambil(t)
+    if (res.status === 401) res = await ambil((t = await token(true)))
   }
-  if (!res.ok) throw new Error(`Greenpark: GET /api/board gagal (HTTP ${res.status})`)
 
-  const data = (await res.json()) as GPPapan
+  let data: GPPapan
+  let umur = 0
+  if (res.status === 404) {
+    // Papan utama (`bd-utama`) hanya dibuat alat import-board — produksi dan
+    // laptop tidak punya. Gabungkan saja semua papan yang boleh dilihat orang
+    // ini; lebih mahal, jadi disinggahkan lebih lama.
+    data = await gabungSemuaPapan(t)
+    umur = 30_000 - UMUR_MS
+  } else {
+    if (!res.ok) throw new Error(`Greenpark: GET /api/board gagal (HTTP ${res.status})`)
+    data = (await res.json()) as GPPapan
+  }
   if (singgahanPer.size > 50) singgahanPer.clear()
-  singgahanPer.set(tp, { pada: kini, data })
+  singgahanPer.set(tp, { pada: kini + umur, data })
   isiPetaOrang(data)
   return data
+}
+
+/** Semua papan yang terlihat oleh pemilik token, digabung jadi satu GPPapan:
+ *  kolom dari tiap papan ditumpuk (id `sys-todo@<papan>` tetap terpetakan
+ *  lewat `statusKolom`), roster diambil sekali karena sama di tiap papan. */
+async function gabungSemuaPapan(t: string): Promise<GPPapan> {
+  const h = { headers: { Authorization: `Bearer ${t}` }, cache: 'no-store' as const }
+  const r = await fetch(`${BASIS}/api/boards`, h)
+  if (!r.ok) throw new Error(`Greenpark: GET /api/boards gagal (HTTP ${r.status})`)
+  const { boards = [] } = (await r.json()) as { boards?: { id: string }[] }
+  const tampilan = await Promise.all(
+    boards.map(async (b) => {
+      try {
+        const v = await fetch(`${BASIS}/api/board?boardId=${encodeURIComponent(b.id)}`, h)
+        return v.ok ? ((await v.json()) as GPPapan) : null
+      } catch {
+        return null // satu papan rusak tidak boleh mengosongkan kantor
+      }
+    }),
+  )
+  const ada = tampilan.filter((v): v is GPPapan => v !== null)
+  return {
+    lists: ada.flatMap((v) => v.lists ?? []),
+    users: ada.find((v) => v.users?.length)?.users ?? [],
+  }
 }
 
 // --- peta orang -------------------------------------------------------------
